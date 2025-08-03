@@ -1,0 +1,282 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8" />
+  <title>Emoji Search</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg%20xmlns%3D'http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg'%20width%3D'48'%20height%3D'48'%20viewBox%3D'0%200%2016%2016'%3E%3Ctext%20x%3D'0'%20y%3D'14'%3E%F0%9F%94%8E%3C%2Ftext%3E%3C%2Fsvg%3E" />
+  <style>
+    body {
+      font-family: sans-serif;
+      margin: 2rem;
+    }
+
+    input {
+      font-size: 1.2rem;
+      padding: 0.5rem;
+      width: 100%;
+      margin-bottom: 1rem;
+    }
+
+    .emoji-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(60px, 1fr));
+      gap: 1rem;
+    }
+
+    .emoji {
+      font-size: 2rem;
+      cursor: pointer;
+      text-align: center;
+    }
+
+    .emoji:hover {
+      background: #eee;
+      border-radius: 6px;
+    }
+
+    .emoji.selected {
+      background: #007acc;
+      color: white;
+      border-radius: 6px;
+      box-shadow: 0 0 0 2px #007acc;
+    }
+
+    .copied {
+      background: lightgreen;
+    }
+  </style>
+</head>
+
+<body>
+  <h1>🔍 Emoji Search</h1>
+  <input type="text" id="search" placeholder="Type a keyword or description..." />
+  <button id="copy-emojis" style="margin-left: 1rem; margin-bottom: 1rem;">📋 Copy all</button>
+  <button id="copy-json" style="margin-bottom: 1rem;">📋 Copy as JSON</button>
+  <button id="copy-favicon" style="margin-bottom: 1rem;">🌐 Copy as favicon</button>
+  <p style="color: #666; font-size: 0.9rem; margin-top: 0.5rem;">
+    Click emoji to copy • Double-click to select for favicon
+  </p>
+  <div class="emoji-grid" id="results"></div>
+
+  <script type="module">
+
+    let response = await fetch('emoji.json')
+    if (!response.ok) {
+      throw new Error(`Failed to load emoji data: ${response.statusText}`)
+    }
+    const emojiData = await response.json()
+    let lastMatches = []
+    let selectedEmoji = null
+
+    const input = document.getElementById('search')
+    const results = document.getElementById('results')
+
+    function parseQuery(queryRaw) {
+      const terms = []
+      const exclusions = []
+      
+      // Split on spaces but preserve quoted strings
+      const tokens = queryRaw.match(/(-?"[^"]*"|-?\S+)/g) || []
+      
+      for (const token of tokens) {
+        if (token.startsWith('-')) {
+          const exclusionTerm = token.slice(1)
+          const isQuoted = exclusionTerm.startsWith('"') && exclusionTerm.endsWith('"')
+          const cleanTerm = isQuoted ? exclusionTerm.slice(1, -1) : exclusionTerm
+          exclusions.push({ term: cleanTerm.toLowerCase(), isQuoted })
+        } else {
+          const isQuoted = token.startsWith('"') && token.endsWith('"')
+          const cleanTerm = isQuoted ? token.slice(1, -1) : token
+          terms.push({ term: cleanTerm.toLowerCase(), isQuoted })
+        }
+      }
+      
+      return { terms, exclusions }
+    }
+
+    function matchesExclusion(entry, exclusion) {
+      const desc = entry.description.toLowerCase()
+      const keywords = entry.keywords.map(k => k.toLowerCase())
+      
+      if (exclusion.isQuoted) {
+        return desc.includes(exclusion.term) || keywords.some(k => k.includes(exclusion.term))
+      } else {
+        return desc.includes(exclusion.term) || keywords.some(k => k.includes(exclusion.term))
+      }
+    }
+
+    function getMatchScore(entry, term) {
+      const desc = entry.description.toLowerCase()
+      const keywords = entry.keywords.map(k => k.toLowerCase())
+
+      if (term.isQuoted) {
+        // For quoted searches, look for exact substring matches
+        if (desc.includes(term.term)) return 0
+        if (keywords.some(k => k.includes(term.term))) return 1
+        return Infinity
+      }
+
+      // Fuzzy match fallback
+      if (desc === term.term || keywords.includes(term.term)) return 0
+
+      const descIndex = desc.indexOf(term.term)
+      if (descIndex !== -1) return 1 + descIndex
+
+      const keywordIndex = keywords.findIndex(k => k.includes(term.term))
+      if (keywordIndex !== -1) return 100 + keywordIndex
+
+      return Infinity
+    }
+
+    function escapeRegex(str) {
+      return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+    }
+
+    function renderResults(query = '') {
+      const q = query.trim()
+      results.innerHTML = ''
+
+      if (!q) return
+
+      const { terms, exclusions } = parseQuery(q)
+      
+      if (terms.length === 0) return
+
+      lastMatches = emojiData
+        .filter(e => {
+          // Must match at least one positive term
+          const hasMatch = terms.some(term => {
+            const desc = e.description.toLowerCase()
+            const keywords = e.keywords.map(k => k.toLowerCase())
+            
+            if (term.isQuoted) {
+              const wordRegex = new RegExp(`\\b${escapeRegex(term.term)}\\b`)
+              return wordRegex.test(desc) || keywords.some(k => wordRegex.test(k))
+            } else {
+              return desc.includes(term.term) || keywords.some(k => k.includes(term.term))
+            }
+          })
+          
+          if (!hasMatch) return false
+          
+          // Must not match any exclusion
+          const hasExclusion = exclusions.some(exclusion => matchesExclusion(e, exclusion))
+          return !hasExclusion
+        })
+        .map(e => ({ 
+          entry: e, 
+          score: Math.min(...terms.map(term => getMatchScore(e, term)))
+        }))
+        .sort((a, b) => a.score - b.score)
+        .slice(0, 200)
+
+      for (let { entry } of lastMatches) {
+        const div = document.createElement('div')
+        div.className = 'emoji'
+        div.textContent = entry.emoji
+        div.title = entry.description
+        
+        let clickTimeout = null
+        
+        div.onclick = (e) => {
+          if (clickTimeout) {
+            // This is a double-click
+            clearTimeout(clickTimeout)
+            clickTimeout = null
+            
+            // Select for favicon
+            document.querySelectorAll('.emoji.selected').forEach(el => el.classList.remove('selected'))
+            div.classList.add('selected')
+            selectedEmoji = entry
+          } else {
+            // This might be a single click - wait to see
+            clickTimeout = setTimeout(() => {
+              // Single click - copy emoji
+              navigator.clipboard.writeText(entry.emoji)
+              div.classList.add('copied')
+              setTimeout(() => div.classList.remove('copied'), 800)
+              clickTimeout = null
+            }, 300)
+          }
+        }
+        
+        results.appendChild(div)
+      }
+    }
+
+    const copyBtn = document.getElementById('copy-json')
+
+    copyBtn.addEventListener('click', () => {
+      const json = JSON.stringify(lastMatches.map(m => m.entry), null, 2)
+      navigator.clipboard.writeText(json).then(() => {
+        copyBtn.textContent = '✅ Copied!'
+        setTimeout(() => {
+          copyBtn.textContent = '📋 Copy as JSON'
+        }, 2000)
+      }).catch(err => {
+        copyBtn.textContent = '❌ Failed to copy'
+        setTimeout(() => {
+          copyBtn.textContent = '📋 Copy as JSON'
+        }, 2000)
+      })
+    })
+
+    const copyEmojisBtn = document.getElementById('copy-emojis')
+
+    copyEmojisBtn.addEventListener('click', () => {
+      const emojiString = lastMatches.map(m => m.entry.emoji).join('')
+
+      navigator.clipboard.writeText(emojiString).then(() => {
+        copyEmojisBtn.textContent = '✅ Copied!'
+        setTimeout(() => {
+          copyEmojisBtn.textContent = '📋 Copy all'
+        }, 2000)
+      }).catch(err => {
+        copyEmojisBtn.textContent = '❌ Failed to copy'
+        setTimeout(() => {
+          copyEmojisBtn.textContent = '📋 Copy all'
+        }, 2000)
+      })
+    })
+
+    const copyFaviconBtn = document.getElementById('copy-favicon')
+
+    copyFaviconBtn.addEventListener('click', () => {
+      if (lastMatches.length === 0) {
+        copyFaviconBtn.textContent = '❌ No emojis to convert'
+        setTimeout(() => {
+          copyFaviconBtn.textContent = '🌐 Copy as favicon'
+        }, 2000)
+        return
+      }
+
+      // Use selected emoji, or fall back to first result
+      const emoji = selectedEmoji 
+        ? selectedEmoji.emoji
+        : lastMatches[0].entry.emoji
+
+      const svgData = `<svg xmlns='http://www.w3.org/2000/svg' width='48' height='48' viewBox='0 0 16 16'><text x='0' y='14'>${emoji}</text></svg>`
+      const encodedData = encodeURIComponent(svgData)
+      const linkTag = `<link rel="icon" href="data:image/svg+xml,${encodedData}" />`
+
+      navigator.clipboard.writeText(linkTag).then(() => {
+        copyFaviconBtn.textContent = '✅ Favicon copied!'
+        setTimeout(() => {
+          copyFaviconBtn.textContent = '🌐 Copy as favicon'
+        }, 2000)
+      }).catch(err => {
+        copyFaviconBtn.textContent = '❌ Failed to copy'
+        setTimeout(() => {
+          copyFaviconBtn.textContent = '🌐 Copy as favicon'
+        }, 2000)
+      })
+    })
+
+    input.addEventListener('input', () => renderResults(input.value))
+
+  </script>
+
+</body>
+
+</html>
