@@ -13,6 +13,8 @@ A fast, lightweight emoji search tool with advanced filtering capabilities and f
 
 ## 📁 Files
 
+Sites/emoji/search-emoji
+
 ```
 ├── convert.js          # 🔄 Converts CLDR data to searchable format
 ├── emoji-data.json     # 📊 Raw emoji data from Unicode CLDR
@@ -97,4 +99,4 @@ Works in all modern browsers that support:
 
 ## 📄 License
 
-Public domain - feel free to use, modify, and distribute! 🎉.
+Public domain - feel free to use, modify, and distribute! 🎉
